@@ -238,28 +238,26 @@ def parse(tokens_):
             ix_value2 = ix_open_brace + 3
             ix_range2 = ix_open_brace + 4
             ix_step = ix_open_brace + 5
+
+
+            # {value1..value2..step}
+            with_step = ix_step + 1 == ix_close_brace
+            # {value1..value2}
+            without_step = ix_value2 + 1 == ix_close_brace
+
+            ok = False
+            if with_step:
+                step_str = tokens[ix_step].cont
+                ok = tokens[ix_range].type == Tok.range and tokens[ix_range2].type == Tok.range and is_int(step_str)
+            elif without_step:
+                step_str = "1"
+                ok = tokens[ix_range].type == Tok.range
             
-            value1 = tokens[ix_value1].cont
-            value2 = tokens[ix_value2].cont
-
-            ok = is_valid_range(value1, value2) and tokens[ix_range].type == Tok.range
-
-            step = 1
-
             if ok:
-                if ix_step + 1 == ix_close_brace and tokens[ix_range2].type == Tok.range:
-                    # {value1..value2..step}
-                    step_str = tokens[ix_step].cont
-                    if is_int(step_str):
-                        step = abs(int(step_str))
-                    else:
-                        ok = False
-                elif ix_value2 + 1 == ix_close_brace:
-                    # {value1..value2}
-                    pass
-                else:
-                    # invalid expr
-                    ok = False
+                value1 = tokens[ix_value1].cont
+                value2 = tokens[ix_value2].cont
+                step = abs(int(step_str))
+                ok = is_valid_range(value1, value2) and tokens[ix_range].type == Tok.range
                 
             if ok:
                 blocks.append(ExprRange(value1, value2, step))

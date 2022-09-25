@@ -126,6 +126,12 @@ class TestExpandArgs(unittest.TestCase):
         args = ["}foo{"]
         self.assertEqual(args, expand_args(args))
 
+    def test_invalid(self):
+        args = ["{name}"]
+        self.assertEqual(args, expand_args(args))
+
+        args = ["{name..}"]
+        self.assertEqual(args, expand_args(args))
 
 if __name__ == "__main__":
     unittest.main()
