@@ -10,4 +10,4 @@ if __name__ == "__main__":
         debug = False
     if debug:
         print("args: ", " ".join(args))
-    print(" ".join(expand_args(args, debug)))
+    print(" ".join(expand_args(args, debug = debug)))

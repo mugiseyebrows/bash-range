@@ -2,152 +2,10 @@ from dataclasses import dataclass
 from itertools import product
 import sys
 
-class Tok:
-    (
-        undefined,
-        open_brace,
-        close_brace,
-        single_quotes,
-        double_quotes,
-        comma,
-        range,
-        value,
-    ) = range(8)
-
-@dataclass
-class T:
-    type: int
-    cont: str
-
-class Lexer:
-    def __init__(self):
-        self.res = []
-        self.tok = T(Tok.undefined, "")
-    
-    def flush(self, t = Tok.undefined, allow_empty = False):
-        if t != Tok.undefined:
-            self.tok.type = t
-        if allow_empty or self.tok.cont != "":
-            self.res.append(self.tok)
-        self.clear()
-
-    def clear(self):
-        self.tok = T(Tok.undefined, "")
-
-    def push(self, c):
-        self.tok.cont += c
-
-    def append(self, tok):
-        self.res.append(tok)
-
-def lexer(arg):
-
-    # todo escaping
-
-    in_braces = False
-    in_single_quotes = False
-    in_double_quotes = False
-    list_mode = False
-
-    lexer = Lexer()
-
-    def char_at(i, ch):
-        if i >= 0 and i < len(arg):
-            return arg[i] == ch
-        return False
-
-    for i,c in enumerate(arg):
-
-        if in_single_quotes:
-            lexer.push(c)
-            if c == "'":
-                in_single_quotes = False
-                lexer.flush()
-                
-        elif in_double_quotes:
-            lexer.push(c)
-            if c == '"':
-                in_double_quotes = False
-                lexer.flush()
-
-        else:
-
-            if c == "{":
-
-                lexer.flush()
-                lexer.append(T(Tok.open_brace, "{"))
-                in_braces = True
-
-            elif c == "}":
-
-                allow_empty = in_braces and list_mode
-                type_ = Tok.value if in_braces else Tok.undefined
-
-                lexer.flush(type_, allow_empty=allow_empty)
-                lexer.append(T(Tok.close_brace, "}"))
-                in_braces = False
-                list_mode = False
-
-            elif c == '"':
-
-                lexer.flush()
-                lexer.push(c)
-                in_double_quotes = True
-                    
-            elif c == "'":
-
-                lexer.flush()
-                lexer.push(c)
-                in_single_quotes = True
-
-            elif c == '.':
-
-                if in_braces and char_at(i+1, ".") and not list_mode:
-                    lexer.flush(Tok.value)
-
-                lexer.push(c)
-                if lexer.tok.cont == "..":
-                    lexer.flush(Tok.range)
-
-            elif c == ',':
-
-                if in_braces:
-                    list_mode = True
-                    lexer.flush(Tok.value, allow_empty=True)
-                    lexer.append(T(Tok.comma, ","))
-                else:
-                    lexer.push(c)
-
-            else:
-                lexer.push(c)
-
-    lexer.flush()
-
-    return lexer.res
-
-def index_of(tokens, t, start = 0):
-    for i, tok in enumerate(tokens):
-        if i < start:
-            continue
-        if tok.type == t:
-            return i
-
 def unquoted(s):
     if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
         return s[1:-1]
     return s
-
-class ExprStr:
-    def __init__(self, tokens, unquote = True):
-        if unquote:
-            modify = unquoted
-        else:
-            modify = lambda s: s
-        self.cont = "".join([modify(tok.cont) for tok in tokens])
-    def __repr__(self) -> str:
-        return "ExprStr({})".format(self.cont)
-    def eval(self):
-        return [self.cont]
 
 def is_int(v):
     try:
@@ -199,119 +57,108 @@ class ExprRange:
         else:
             raise ValueError("Invalid {}".format(self))
 
-def parse(tokens_):
-    tokens = tokens_[:]
-    blocks = []
-    while len(tokens):
-        ix_open_brace = index_of(tokens, Tok.open_brace)
-        ix_close_brace = index_of(tokens, Tok.close_brace)
+def parse_and_evaluate(arg, modify, debug = False):
 
-        if None not in [ix_open_brace, ix_close_brace]:
-            # } {
-            if ix_close_brace < ix_open_brace:
-                ix_close_brace = index_of(tokens, Tok.close_brace, ix_open_brace + 1)
+    quote_ranges = []
+    double_quotes_ranges = []
+    expr_ranges = []
 
-        if None not in [ix_open_brace, ix_close_brace]:
-            # { { } 
-            for ix in range(ix_open_brace+1, ix_close_brace):
-                if tokens[ix].type == Tok.open_brace:
-                    ix_open_brace = ix
+    state_norm, state_quote, state_double_quotes, state_expr = range(4)
 
-        if ix_open_brace is None or ix_close_brace is None:
-            blocks.append(ExprStr(tokens))
-            tokens = []
-            break
+    state = state_norm
+    pos_quotes = -1
+    pos_double_quotes = -1
+    pos_expr = -1
+    expr_is_valid = True
 
-        if ix_open_brace > 0:
-            blocks.append(ExprStr(tokens[0:ix_open_brace]))
+    for i,c in enumerate(arg):
+        if state == state_norm:
+            if c == "'":
+                pos_quotes = i
+                state = state_quote
+            elif c == '"':
+                pos_double_quotes = i
+                state = state_double_quotes
+            elif c == '{':
+                pos_expr = i
+                expr_is_valid = True
+                state = state_expr
 
+        elif state == state_quote:
+            if c == "'":
+                quote_ranges.append((pos_quotes, i))
+                state = state_norm
 
-        list_mode = False
-        for ix in range(ix_open_brace + 1, ix_close_brace):
-            if tokens[ix].type == Tok.comma:
-                list_mode = True
+        elif state == state_double_quotes:
+            if c == '"':
+                double_quotes_ranges.append((pos_double_quotes, i))
+                state = state_norm
 
-        if not list_mode:
-
-            ix_value1 = ix_open_brace + 1
-            ix_range = ix_open_brace + 2
-            ix_value2 = ix_open_brace + 3
-            ix_range2 = ix_open_brace + 4
-            ix_step = ix_open_brace + 5
-
-
-            # {value1..value2..step}
-            with_step = ix_step + 1 == ix_close_brace
-            # {value1..value2}
-            without_step = ix_value2 + 1 == ix_close_brace
-
-            ok = False
-            if with_step:
-                step_str = tokens[ix_step].cont
-                ok = tokens[ix_range].type == Tok.range and tokens[ix_range2].type == Tok.range and is_int(step_str)
-            elif without_step:
-                step_str = "1"
-                ok = tokens[ix_range].type == Tok.range
-            
-            if ok:
-                value1 = tokens[ix_value1].cont
-                value2 = tokens[ix_value2].cont
-                step = abs(int(step_str))
-                ok = is_valid_range(value1, value2) and tokens[ix_range].type == Tok.range
-                
-            if ok:
-                blocks.append(ExprRange(value1, value2, step))
-            else:
-                blocks.append(ExprStr(tokens[ix_open_brace:ix_close_brace+1], unquote=False))
-
-        else:
-            # list mode
-
-            ok = True
-            ix = ix_open_brace + 1
-            values = []
-            while True:
-                if tokens[ix].type != Tok.value:
-                    ok = False
-                values.append(tokens[ix].cont)
-                ix += 1
-                if ix == ix_close_brace:
-                    break
-                if tokens[ix].type != Tok.comma:
-                    ok = False
-                ix += 1
-                if ix == ix_close_brace:
-                    break
-            
-            if ok:
-                blocks.append(ExprList(values))
-            else:
-                blocks.append(ExprStr(tokens[ix_open_brace:ix_close_brace+1], unquote=False))
-
-            
-        tokens = tokens[ix_close_brace+1:]
-    return blocks
-
-def evaluate(blocks):
-    evaluated = [block.eval() for block in blocks]
-    return ["".join(item) for item in product(*evaluated)]
+        elif state == state_expr:
+            if c == '{':
+                pos_expr = i
+                expr_is_valid = True
+            elif c == '}':
+                if expr_is_valid:
+                    expr_ranges.append((pos_expr, i))
+                state = state_norm
+            elif c in ["'", '"']:
+                expr_is_valid = False
     
-def parse_lex_evaluate(arg, debug = False):
-    tokens = lexer(arg)
-    if debug:
-        print("tokens: ", tokens)
-    blocks = parse(tokens)
-    if debug:
-        print("blocks: ", blocks)
-    return evaluate(blocks)
+    evaluated = []
 
-def expand_args(args = None, debug = False):
+    pos_prev = 0
+    for pos_op, pos_cl in expr_ranges:
+        if pos_prev < pos_op:
+            evaluated.append([modify(arg[pos_prev:pos_op])])
+        evaluated.append(evaluate(arg[pos_op+1:pos_cl]))
+        pos_prev = pos_cl + 1
+    
+    pos_op = len(arg)
+    if pos_prev < pos_op:
+        evaluated.append([modify(arg[pos_prev:pos_op])])
+
+    if debug:
+        print("evaluated:", evaluated)
+        
+    return ["".join(item) for item in product(*evaluated)]
+
+def evaluate(arg):
+    if ',' in arg:
+        vars = arg.split(',')
+        expr = ExprList(vars)
+        return expr.eval()
+    elif '..' in arg:
+        vars = arg.split('..')
+        expr = None
+        if len(vars) == 2:
+            if is_valid_range(vars[0], vars[1]):
+                expr = ExprRange(vars[0], vars[1], 1)
+        elif len(vars) == 3:
+            if is_valid_range(vars[0], vars[1]) and is_int(vars[2]):
+                expr = ExprRange(vars[0], vars[1], int(vars[2]))
+        if expr:
+            return expr.eval()
+    return ['{' + arg + '}']
+
+def expand_args(args = None, remove_double_quotes = True, remove_quote = True, debug = False):
+    
+    if remove_quote and remove_double_quotes:
+        modify = lambda s: s.replace('"','').replace("'",'')
+    elif remove_double_quotes:
+        modify = lambda s: s.replace('"','')
+    elif remove_quote:
+        modify = lambda s: s.replace('"','')
+    else:
+        modify = lambda s: s
+    
     if args is None:
         args = sys.argv[1:]
     res = []
+
     for arg in args:
         if "{" not in arg or "}" not in arg :
-            res.append(arg)
+            res.append(modify(arg))
         else:
-            res += parse_lex_evaluate(arg, debug)
+            res += parse_and_evaluate(arg, modify, debug)
     return res
