@@ -1,164 +1,102 @@
-from dataclasses import dataclass
-from itertools import product
+import re
+import itertools
 import sys
 
-def unquoted(s):
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+def split_arg(arg):
+    gs = []
+    op = -1
+    for i, c in enumerate(arg):
+        if c == '{':
+            op = i
+        elif c == '}':
+            if op > -1:
+                gs.append((op, i))
+            op = -1
+    res = []
+    prev = 0
+    for op, cl in gs:
+        res.append(arg[prev:op])
+        res.append(arg[op:cl+1])
+        prev = cl+1
+    res.append(arg[prev:])
+    return res
+
+def digits_range(i1, i2, inc):
+    if i1 > i2:
+        return [str(e) for e in reversed(range(i2, i1+1, inc))]
+    else:
+        return [str(e) for e in range(i1, i2+1, inc)]
+
+def letters_range(o1, o2, inc):
+    if o1 > o2:
+        return [chr(e) for e in reversed(range(o2, o1+1, inc))]
+    else:
+        return [chr(e) for e in range(o1, o2+1, inc)]
+
+def is_lower(c):
+    return c == c.lower()
+
+def expand_group(grp):
+    if grp == '':
+        return [grp]
+    digits = None
+    letters = None
+    m = re.match('^[{]([0-9]+)\\.\\.([0-9]+)\\.\\.([0-9]+)[}]$', grp)
+    if m:
+        return digits_range(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match('^[{]([0-9]+)\\.\\.([0-9]+)[}]$', grp)
+    if m:
+        return digits_range(int(m.group(1)), int(m.group(2)), 1)
+    m = re.match('^[{]([a-z])\\.\\.([a-z])\\.\\.([0-9]+)[}]$', grp, re.IGNORECASE)
+    if m:
+        c1 = m.group(1)
+        c2 = m.group(2)
+        inc = int(m.group(3))
+        if is_lower(c1) == is_lower(c2):
+            return letters_range(ord(c1), ord(c2), inc)
+    m = re.match('^[{]([a-z])\\.\\.([a-z])[}]$', grp, re.IGNORECASE)
+    if m:
+        c1 = m.group(1)
+        c2 = m.group(2)
+        inc = 1
+        if is_lower(c1) == is_lower(c2):
+            return letters_range(ord(c1), ord(c2), inc)
+    if ',' in grp and ' ' not in grp and grp.startswith('{') and grp.endswith('}'):
+        return grp[1:-1].split(',')
+    return [grp]
+
+def has_expanded_groups(groups):
+    for group in groups:
+        if len(group) > 1:
+            return True
+    return False
+
+def unquote(s):
+    if s.startswith('"') and s.endswith('"'):
+        return s[1:-1]
+    if s.startswith("'") and s.endswith("'"):
         return s[1:-1]
     return s
 
-def is_int(v):
-    try:
-        int(v)
-        return True
-    except ValueError:
-        return False
+def unquote_group(group):
+    if len(group) == 1:
+        return [unquote(e) for e in group]
+    return group
 
-def is_letter(v):
-    return len(v) == 1
+def expand_arg(arg):
+    groups = [expand_group(e) for e in split_arg(arg)]
+    if has_expanded_groups(groups):
+        groups = [unquote_group(group) for group in groups]
+        res = []
+        for cmb in itertools.product(*groups):
+            res.append("".join(cmb))
+        return res
+    return [arg]
 
-def is_valid_range(v1, v2):
-    i1 = is_int(v1)
-    i2 = is_int(v2)
-    return (i1 and i2) or (is_letter(v1) and is_letter(v2) and not i1 and not i2)
-    
-class ExprList:
-    def __init__(self, values):
-        self.values = values
-    def __repr__(self):
-        return "ExprList({})".format(",".join(['"{}"'.format(value) for value in self.values]))
-    def eval(self):
-        return [unquoted(value) for value in self.values]
-
-class ExprRange:
-    def __init__(self, value1, value2, step):
-        self.value1 = value1
-        self.value2 = value2
-        self.step = step
-    def __repr__(self) -> str:
-        return "ExprRange({},{})".format(self.value1, self.value2)
-    def eval(self):
-        if is_int(self.value1) and is_int(self.value2):
-            value1 = int(self.value1)
-            value2 = int(self.value2)
-            if value1 > value2:
-                it = reversed(range(value2,value1+1,self.step))
-            else:
-                it = range(value1,value2+1,self.step)
-            return [str(v) for v in it]
-        elif is_letter(self.value1) and is_letter(self.value2):
-            value1 = ord(self.value1)
-            value2 = ord(self.value2)
-            if value1 > value2:
-                it = reversed(range(value2,value1+1,self.step))
-            else:
-                it = range(value1,value2+1,self.step)
-            return [chr(v) for v in it]
-        else:
-            raise ValueError("Invalid {}".format(self))
-
-def parse_and_evaluate(arg, modify, debug = False):
-
-    quote_ranges = []
-    double_quotes_ranges = []
-    expr_ranges = []
-
-    state_norm, state_quote, state_double_quotes, state_expr = range(4)
-
-    state = state_norm
-    pos_quotes = -1
-    pos_double_quotes = -1
-    pos_expr = -1
-    expr_is_valid = True
-
-    for i,c in enumerate(arg):
-        if state == state_norm:
-            if c == "'":
-                pos_quotes = i
-                state = state_quote
-            elif c == '"':
-                pos_double_quotes = i
-                state = state_double_quotes
-            elif c == '{':
-                pos_expr = i
-                expr_is_valid = True
-                state = state_expr
-
-        elif state == state_quote:
-            if c == "'":
-                quote_ranges.append((pos_quotes, i))
-                state = state_norm
-
-        elif state == state_double_quotes:
-            if c == '"':
-                double_quotes_ranges.append((pos_double_quotes, i))
-                state = state_norm
-
-        elif state == state_expr:
-            if c == '{':
-                pos_expr = i
-                expr_is_valid = True
-            elif c == '}':
-                if expr_is_valid:
-                    expr_ranges.append((pos_expr, i))
-                state = state_norm
-            elif c in ["'", '"']:
-                expr_is_valid = False
-    
-    evaluated = []
-
-    pos_prev = 0
-    for pos_op, pos_cl in expr_ranges:
-        if pos_prev < pos_op:
-            evaluated.append([modify(arg[pos_prev:pos_op])])
-        evaluated.append(evaluate(arg[pos_op+1:pos_cl]))
-        pos_prev = pos_cl + 1
-    
-    pos_op = len(arg)
-    if pos_prev < pos_op:
-        evaluated.append([modify(arg[pos_prev:pos_op])])
-
-    if debug:
-        print("evaluated:", evaluated)
-        
-    return ["".join(item) for item in product(*evaluated)]
-
-def evaluate(arg):
-    if ',' in arg:
-        vars = arg.split(',')
-        expr = ExprList(vars)
-        return expr.eval()
-    elif '..' in arg:
-        vars = arg.split('..')
-        expr = None
-        if len(vars) == 2:
-            if is_valid_range(vars[0], vars[1]):
-                expr = ExprRange(vars[0], vars[1], 1)
-        elif len(vars) == 3:
-            if is_valid_range(vars[0], vars[1]) and is_int(vars[2]):
-                expr = ExprRange(vars[0], vars[1], int(vars[2]))
-        if expr:
-            return expr.eval()
-    return ['{' + arg + '}']
-
-def expand_args(args = None, remove_double_quotes = True, remove_quote = True, debug = False):
-    
-    if remove_quote and remove_double_quotes:
-        modify = lambda s: s.replace('"','').replace("'",'')
-    elif remove_double_quotes:
-        modify = lambda s: s.replace('"','')
-    elif remove_quote:
-        modify = lambda s: s.replace('"','')
-    else:
-        modify = lambda s: s
-    
+def expand_args(args = None):
     if args is None:
         args = sys.argv[1:]
     res = []
-
     for arg in args:
-        if "{" not in arg or "}" not in arg :
-            res.append(modify(arg))
-        else:
-            res += parse_and_evaluate(arg, modify, debug)
+        res += expand_arg(arg)
     return res
